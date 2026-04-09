@@ -1,0 +1,12 @@
+{
+  "name": "pi-clean-prompt",
+  "version": "1.0.0",
+  "description": "Strips the 'operating inside pi' phrase and the Pi documentation block from the system prompt",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  }
+}

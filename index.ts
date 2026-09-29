@@ -1,7 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
-  pi.on("before_agent_start", (event) => {
+  pi.on("before_agent_start", (event, ctx) => {
+    // Only run when using an Anthropic model through the Anthropic provider
+    if (ctx.model?.provider !== "anthropic" || ctx.model?.api !== "anthropic-messages") {
+      return;
+    }
+
     let prompt = event.systemPrompt;
 
     // Remove "operating inside pi, a coding agent harness" from the opening sentence

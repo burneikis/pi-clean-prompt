@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
-import { test } from "node:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, test } from "node:test";
+
+const AGENT_DIR = mkdtempSync(join(tmpdir(), "pi-clean-prompt-agent-"));
+const PROJECT_DIR = mkdtempSync(join(tmpdir(), "pi-clean-prompt-project-"));
+const GLOBAL_CONFIG = join(AGENT_DIR, "clean-prompt.json");
+const PROJECT_CONFIG = join(PROJECT_DIR, ".pi", "clean-prompt.json");
 
 const PI_RUNTIME_STUB = `data:text/javascript,
+  export const CONFIG_DIR_NAME = ".pi";
+  export const getAgentDir = () => ${JSON.stringify(AGENT_DIR)};
   export const getReadmePath = () => "/pi/README.md";
   export const getDocsPath = () => "/pi/docs";
   export const getExamplesPath = () => "/pi/examples";`;
@@ -13,6 +22,16 @@ registerHooks({
     if (specifier === "@earendil-works/pi-coding-agent") return { url: PI_RUNTIME_STUB, shortCircuit: true };
     return nextResolve(specifier, context);
   },
+});
+
+process.on("exit", () => {
+  rmSync(AGENT_DIR, { recursive: true, force: true });
+  rmSync(PROJECT_DIR, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  rmSync(GLOBAL_CONFIG, { force: true });
+  rmSync(PROJECT_CONFIG, { force: true });
 });
 
 const { default: cleanPrompt } = await import("./index.ts");
@@ -122,14 +141,57 @@ for (const [label, model] of Object.entries(untouchedModels)) {
   });
 }
 
+test("docs skill is agent invocable by default", () => {
+  beforeAgentStart(SECTIONED_PROMPT, ANTHROPIC);
+  assert.match(readSkill(), /\ndisable-model-invocation: false\n/);
+});
+
+test("agentInvocable false disables model invocation of the docs skill", () => {
+  writeConfig(GLOBAL_CONFIG, { agentInvocable: false });
+  beforeAgentStart(SECTIONED_PROMPT, ANTHROPIC);
+  assert.match(readSkill(), /\ndisable-model-invocation: true\n/);
+});
+
+test("agentInvocable false applies on resources_discover", () => {
+  writeConfig(GLOBAL_CONFIG, { agentInvocable: false });
+  handlers.resources_discover({ type: "resources_discover", cwd: "/tmp", reason: "startup" });
+  assert.match(readSkill(), /\ndisable-model-invocation: true\n/);
+});
+
+test("alwaysOn cleans the prompt for non-anthropic models", () => {
+  writeConfig(GLOBAL_CONFIG, { alwaysOn: true });
+  for (const model of Object.values(untouchedModels)) {
+    assert.equal(systemPromptFor(SECTIONED_PROMPT, model), CLEAN_SECTIONED_PROMPT);
+  }
+});
+
+test("project config overrides global config", () => {
+  writeConfig(GLOBAL_CONFIG, { alwaysOn: true, agentInvocable: false });
+  writeConfig(PROJECT_CONFIG, { alwaysOn: false });
+  const model = { provider: "openai", api: "openai-responses" };
+  assert.equal(beforeAgentStart(SECTIONED_PROMPT, model, PROJECT_DIR), undefined);
+  assert.match(readSkill(), /\ndisable-model-invocation: true\n/);
+});
+
+test("invalid config values are ignored", () => {
+  writeConfig(GLOBAL_CONFIG, { alwaysOn: "yes", agentInvocable: 0 });
+  assert.equal(beforeAgentStart(SECTIONED_PROMPT, { provider: "openai", api: "openai-responses" }), undefined);
+  assert.match(readSkill(), /\ndisable-model-invocation: false\n/);
+});
+
+function writeConfig(path, config) {
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, JSON.stringify(config));
+}
+
 function registerExtension() {
   const registered = {};
   cleanPrompt({ on: (event, handler) => (registered[event] = handler) });
   return registered;
 }
 
-function beforeAgentStart(systemPrompt, model) {
-  return handlers.before_agent_start({ type: "before_agent_start", prompt: "hi", systemPrompt }, { model });
+function beforeAgentStart(systemPrompt, model, cwd = "/tmp") {
+  return handlers.before_agent_start({ type: "before_agent_start", prompt: "hi", systemPrompt }, { model, cwd });
 }
 
 function readSkill() {

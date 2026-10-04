@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "description": "Strips the 'operating inside pi' phrase and the Pi documentation block from the system prompt, and provides it as an on-demand pi-docs skill instead",
   "keywords": ["pi-package"],
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs"
+  },
   "pi": {
     "extensions": ["./index.ts"]
   },

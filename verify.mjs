@@ -1,66 +1,106 @@
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { registerHooks } from "node:module";
+import { test } from "node:test";
 
-// Load the extension source, strip type syntax, stub the pi runtime import,
-// and import it via a data: URL so we don't need any build step.
-const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8")
-  .replace(/^\s*import\s+type\s+.*$/m, "")
-  .replace(
-    /^import \{[^}]*\} from "@earendil-works\/pi-coding-agent";$/m,
-    `const getReadmePath = () => "/pi/README.md", getDocsPath = () => "/pi/docs", getExamplesPath = () => "/pi/examples";`,
-  )
-  .replace(/:\s*ExtensionAPI/g, "")
-  .replace(/: string/g, "")
-  .replace("import.meta.url", JSON.stringify(new URL("./index.ts", import.meta.url).href));
-const mod = await import("data:text/javascript," + encodeURIComponent(src));
+const PI_RUNTIME_STUB = `data:text/javascript,
+  export const getReadmePath = () => "/pi/README.md";
+  export const getDocsPath = () => "/pi/docs";
+  export const getExamplesPath = () => "/pi/examples";`;
 
-// Capture the handler the extension registers.
-let handler;
-let discover;
-const pi = {
-  on(event, fn) {
-    if (event === "before_agent_start") handler = fn;
-    if (event === "resources_discover") discover = fn;
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === "@earendil-works/pi-coding-agent") return { url: PI_RUNTIME_STUB, shortCircuit: true };
+    return nextResolve(specifier, context);
   },
+});
+
+const { default: cleanPrompt } = await import("./index.ts");
+const handlers = registerExtension();
+
+const ANTHROPIC = { provider: "anthropic", api: "anthropic-messages" };
+
+const SECTIONED_PROMPT = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files.
+
+<rules>
+- Be concise in your responses
+</rules>
+
+<docs>
+Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
+- some doc bullet
+</docs>
+
+<cwd>
+/tmp
+</cwd>`;
+
+const CLEAN_SECTIONED_PROMPT = `You are an expert coding assistant. You help users by reading files.
+
+<rules>
+- Be concise in your responses
+</rules>
+
+<cwd>
+/tmp
+</cwd>`;
+
+const FLAT_PROMPT = `You are an expert coding assistant operating inside pi, a coding agent harness.
+
+Guidelines:
+- Be concise
+
+Pi documentation (read only when the user asks about pi itself):
+- some doc bullet
+Current date: 2025-01-01
+Current working directory: /tmp`;
+
+const CLEAN_FLAT_PROMPT = `You are an expert coding assistant.
+
+Guidelines:
+- Be concise
+Current date: 2025-01-01
+Current working directory: /tmp`;
+
+test("docs skill is rendered with pi paths", () => {
+  const { skillPaths } = handlers.resources_discover({ type: "resources_discover", cwd: "/tmp", reason: "startup" });
+  const skill = readFileSync(skillPaths[0], "utf8");
+  assert.match(skill, /Main documentation: \/pi\/README\.md/);
+  assert.match(skill, /Additional docs: \/pi\/docs/);
+  assert.match(skill, /Examples: \/pi\/examples/);
+  assert.doesNotMatch(skill, /\{\{\w+\}\}/);
+});
+
+test("sectioned prompt (pi >= 0.86) is cleaned for anthropic-messages", () => {
+  assert.equal(systemPromptFor(SECTIONED_PROMPT, ANTHROPIC), CLEAN_SECTIONED_PROMPT);
+});
+
+test("flat prompt (pi <= 0.85) is cleaned for anthropic-messages", () => {
+  assert.equal(systemPromptFor(FLAT_PROMPT, ANTHROPIC), CLEAN_FLAT_PROMPT);
+});
+
+const untouchedModels = {
+  "openai provider": { provider: "openai", api: "openai-responses" },
+  "claude via bedrock": { provider: "amazon-bedrock", api: "bedrock-converse-stream" },
+  "no model": undefined,
 };
-mod.default(pi);
 
-const { skillPaths } = discover({ type: "resources_discover", cwd: "/tmp", reason: "startup" });
-console.log(`=== rendered skill: ${skillPaths[0]} ===`);
-console.log(readFileSync(skillPaths[0], "utf8").split("\n").slice(10, 15).join("\n"));
+for (const [label, model] of Object.entries(untouchedModels)) {
+  test(`prompt is left alone for ${label}`, () => {
+    assert.equal(beforeAgentStart(SECTIONED_PROMPT, model), undefined);
+  });
+}
 
-// A representative system prompt containing the bits the extension strips.
-const SYSTEM_PROMPT = [
-  "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files.",
-  "",
-  "<rules>",
-  "- Be concise in your responses",
-  "</rules>",
-  "",
-  "<docs>",
-  "Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):",
-  "- some doc bullet",
-  "- another doc bullet",
-  "</docs>",
-  "",
-  "<cwd>",
-  "/tmp",
-  "</cwd>",
-].join("\n");
+function registerExtension() {
+  const registered = {};
+  cleanPrompt({ on: (event, handler) => (registered[event] = handler) });
+  return registered;
+}
 
-const event = { type: "before_agent_start", prompt: "hi", systemPrompt: SYSTEM_PROMPT };
+function beforeAgentStart(systemPrompt, model) {
+  return handlers.before_agent_start({ type: "before_agent_start", prompt: "hi", systemPrompt }, { model });
+}
 
-const cases = [
-  { label: "anthropic provider + anthropic-messages", model: { provider: "anthropic", api: "anthropic-messages" } },
-  { label: "openai provider", model: { provider: "openai", api: "openai-responses" } },
-  { label: "bedrock claude (provider != anthropic)", model: { provider: "amazon-bedrock", api: "bedrock-converse-stream" } },
-  { label: "no model", model: undefined },
-];
-
-for (const c of cases) {
-  const result = await handler(event, { model: c.model });
-  const out = result?.systemPrompt ?? event.systemPrompt; // undefined => unchanged
-  const cleaned = result?.systemPrompt !== undefined && result.systemPrompt !== SYSTEM_PROMPT;
-  console.log(`\n=== ${c.label} ===`);
-  console.log(`changed: ${cleaned}`);
-  console.log(out);
+function systemPromptFor(systemPrompt, model) {
+  return beforeAgentStart(systemPrompt, model)?.systemPrompt;
 }

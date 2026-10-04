@@ -17,6 +17,7 @@ registerHooks({
 
 const { default: cleanPrompt } = await import("./index.ts");
 const handlers = registerExtension();
+const skillPath = handlers.resources_discover({ type: "resources_discover", cwd: "/tmp", reason: "startup" }).skillPaths[0];
 
 const ANTHROPIC = { provider: "anthropic", api: "anthropic-messages" };
 
@@ -71,6 +72,36 @@ test("docs skill is rendered with pi paths", () => {
   assert.doesNotMatch(skill, /\{\{\w+\}\}/);
 });
 
+test("docs skill holds exactly the stripped sectioned docs block", () => {
+  beforeAgentStart(SECTIONED_PROMPT, ANTHROPIC);
+  assert.match(readSkill(), /\nPi documentation \(read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI\):\n- some doc bullet\n$/);
+});
+
+test("docs skill holds exactly the stripped flat docs block", () => {
+  beforeAgentStart(FLAT_PROMPT, ANTHROPIC);
+  assert.match(readSkill(), /\nPi documentation \(read only when the user asks about pi itself\):\n- some doc bullet\n$/);
+});
+
+test("docs skill follows new content in the docs block", () => {
+  beforeAgentStart(SECTIONED_PROMPT.replace("- some doc bullet", "- brand new topic"), ANTHROPIC);
+  assert.match(readSkill(), /- brand new topic/);
+  assert.doesNotMatch(readSkill(), /some doc bullet/);
+});
+
+test("docs skill is updated for non-anthropic models too", () => {
+  beforeAgentStart(SECTIONED_PROMPT.replace("- some doc bullet", "- openai run"), { provider: "openai", api: "openai-responses" });
+  assert.match(readSkill(), /- openai run/);
+});
+
+test("warns when the docs block is present but not matched", () => {
+  const warnings = [];
+  const ui = { notify: (message, type) => warnings.push({ message, type }) };
+  const prompt = SECTIONED_PROMPT.replace("<docs>", "<pi_docs>").replace("</docs>", "</pi_docs>");
+  handlers.before_agent_start({ type: "before_agent_start", prompt: "hi", systemPrompt: prompt }, { model: ANTHROPIC, hasUI: true, ui });
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].type, "warning");
+});
+
 test("sectioned prompt (pi >= 0.86) is cleaned for anthropic-messages", () => {
   assert.equal(systemPromptFor(SECTIONED_PROMPT, ANTHROPIC), CLEAN_SECTIONED_PROMPT);
 });
@@ -99,6 +130,10 @@ function registerExtension() {
 
 function beforeAgentStart(systemPrompt, model) {
   return handlers.before_agent_start({ type: "before_agent_start", prompt: "hi", systemPrompt }, { model });
+}
+
+function readSkill() {
+  return readFileSync(skillPath, "utf8");
 }
 
 function systemPromptFor(systemPrompt, model) {

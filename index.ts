@@ -9,41 +9,49 @@ const DOCS_SKILL_TEMPLATE = join(dirname(fileURLToPath(import.meta.url)), "pi-do
 const DOCS_SKILL_PATH = join(tmpdir(), "pi-clean-prompt", "pi-docs", "SKILL.md");
 
 const PI_HARNESS_MENTION = / operating inside pi, a coding agent harness/;
+const DOCS_BLOCK_START = "Pi documentation (read only when";
 // pi >= 0.86.0 renders prompt sections as <name>...</name> blocks
-const SECTIONED_DOCS_BLOCK = /\n*<docs>\nPi documentation \(read only when.*?<\/docs>/s;
+const SECTIONED_DOCS_BLOCK = /\n*<docs>\n(Pi documentation \(read only when.*?)\n<\/docs>/s;
 // pi <= 0.85.x has a flat prompt; the docs block ends at a blank line or the trailer
 const FLAT_DOCS_BLOCK =
-  /\n\nPi documentation \(read only when.*?(?=\n\n|\nCurrent date:|\nCurrent working directory:)/s;
+  /\n\n(Pi documentation \(read only when.*?)(?=\n\n|\nCurrent date:|\nCurrent working directory:)/s;
 
 export default function cleanPrompt(pi: ExtensionAPI) {
-  pi.on("resources_discover", () => ({ skillPaths: [writeDocsSkill()] }));
+  pi.on("resources_discover", () => ({ skillPaths: [writeDocsSkill(placeholderDocsBody())] }));
 
   pi.on("before_agent_start", (event, ctx) => {
+    const { prompt, docsBlock } = extractDocsBlock(event.systemPrompt);
+    if (docsBlock) writeDocsSkill(docsBlock);
     if (!usesAnthropicMessagesApi(ctx.model)) return;
-    return { systemPrompt: removePiMentions(event.systemPrompt) };
+    if (prompt.includes(DOCS_BLOCK_START) && ctx.hasUI) {
+      ctx.ui.notify("pi-clean-prompt: pi docs block format changed, it was not stripped", "warning");
+    }
+    return { systemPrompt: prompt.replace(PI_HARNESS_MENTION, "") };
   });
 }
 
-function writeDocsSkill(): string {
+function extractDocsBlock(systemPrompt: string): { prompt: string; docsBlock?: string } {
+  for (const pattern of [SECTIONED_DOCS_BLOCK, FLAT_DOCS_BLOCK]) {
+    const match = systemPrompt.match(pattern);
+    if (match) return { prompt: systemPrompt.replace(pattern, ""), docsBlock: match[1] };
+  }
+  return { prompt: systemPrompt };
+}
+
+function writeDocsSkill(body: string): string {
   mkdirSync(dirname(DOCS_SKILL_PATH), { recursive: true });
-  writeFileSync(DOCS_SKILL_PATH, renderDocsSkill());
+  writeFileSync(DOCS_SKILL_PATH, readFileSync(DOCS_SKILL_TEMPLATE, "utf8").replace("{{BODY}}", () => body));
   return DOCS_SKILL_PATH;
 }
 
-function renderDocsSkill(): string {
-  return readFileSync(DOCS_SKILL_TEMPLATE, "utf8")
-    .replaceAll("{{README}}", getReadmePath())
-    .replaceAll("{{DOCS}}", getDocsPath())
-    .replaceAll("{{EXAMPLES}}", getExamplesPath());
+function placeholderDocsBody(): string {
+  return [
+    `- Main documentation: ${getReadmePath()}`,
+    `- Additional docs: ${getDocsPath()}`,
+    `- Examples: ${getExamplesPath()} (extensions, custom tools, SDK)`,
+  ].join("\n");
 }
 
 function usesAnthropicMessagesApi(model: ExtensionContext["model"]): boolean {
   return model?.provider === "anthropic" && model.api === "anthropic-messages";
-}
-
-function removePiMentions(systemPrompt: string): string {
-  return systemPrompt
-    .replace(PI_HARNESS_MENTION, "")
-    .replace(SECTIONED_DOCS_BLOCK, "")
-    .replace(FLAT_DOCS_BLOCK, "");
 }

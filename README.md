@@ -49,8 +49,8 @@ Project values override global values. The extension ignores values that are not
 
 ```json
 {
-  "alwaysOn": false,
-  "agentInvocable": true
+  "alwaysOn": false, // Cleans only for anthropic models by default
+  "agentInvocable": true // Agent-Invocable by default (as pi normally has this context)
 }
 ```
 

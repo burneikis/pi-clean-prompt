@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 
 const AGENT_DIR = mkdtempSync(join(tmpdir(), "pi-clean-prompt-agent-"));
@@ -36,6 +36,8 @@ afterEach(() => {
 
 const { default: cleanPrompt } = await import("./index.ts");
 const ANTHROPIC = { provider: "anthropic", api: "anthropic-messages" };
+const OPENAI = { provider: "openai", api: "openai-responses" };
+const HARNESS_MENTION = " operating inside pi, a coding agent harness";
 
 const handlers = registerExtension();
 const skillPath = handlers.resources_discover(discoverEvent(), { model: ANTHROPIC }).skillPaths[0];
@@ -102,13 +104,13 @@ test("docs skill holds exactly the stripped flat docs block", () => {
 });
 
 test("docs skill follows new content in the docs block", () => {
-  beforeAgentStart(SECTIONED_PROMPT.replace("- some doc bullet", "- brand new topic"), ANTHROPIC);
+  beforeAgentStart(withDocBullet("- brand new topic"), ANTHROPIC);
   assert.match(readSkill(), /- brand new topic/);
   assert.doesNotMatch(readSkill(), /some doc bullet/);
 });
 
 test("docs skill is updated for non-anthropic models too", () => {
-  beforeAgentStart(SECTIONED_PROMPT.replace("- some doc bullet", "- openai run"), { provider: "openai", api: "openai-responses" });
+  beforeAgentStart(withDocBullet("- openai run"), OPENAI);
   assert.match(readSkill(), /- openai run/);
 });
 
@@ -116,7 +118,7 @@ test("warns when the docs block is present but not matched", () => {
   const warnings = [];
   const ui = { notify: (message, type) => warnings.push({ message, type }) };
   const prompt = SECTIONED_PROMPT.replace("<docs>", "<pi_docs>").replace("</docs>", "</pi_docs>");
-  handlers.before_agent_start({ type: "before_agent_start", prompt: "hi", systemPrompt: prompt }, { model: ANTHROPIC, hasUI: true, ui });
+  beforeAgentStart(prompt, ANTHROPIC, { hasUI: true, ui });
   assert.equal(warnings.length, 1);
   assert.equal(warnings[0].type, "warning");
 });
@@ -130,7 +132,7 @@ test("flat prompt (pi <= 0.85) is cleaned for anthropic-messages", () => {
 });
 
 const untouchedModels = {
-  "openai provider": { provider: "openai", api: "openai-responses" },
+  "openai provider": OPENAI,
   "claude via bedrock": { provider: "amazon-bedrock", api: "bedrock-converse-stream" },
   "no model": undefined,
 };
@@ -181,32 +183,29 @@ for (const [label, model] of Object.entries(untouchedModels)) {
 test("docs block stays in the prompt after a switch to anthropic when the skill was not registered", () => {
   writeConfig(GLOBAL_CONFIG, { alwaysOn: false });
   const extension = registerExtension();
-  extension.resources_discover(discoverEvent(), { model: { provider: "openai", api: "openai-responses" } });
-  const before = readSkill();
-  const result = extension.before_agent_start(
-    { type: "before_agent_start", prompt: "hi", systemPrompt: SECTIONED_PROMPT.replace("- some doc bullet", "- not for skill") },
-    { model: ANTHROPIC, cwd: "/tmp" },
-  );
-  assert.equal(result.systemPrompt, SECTIONED_PROMPT.replace(" operating inside pi, a coding agent harness", "").replace("- some doc bullet", "- not for skill"));
-  assert.equal(readSkill(), before);
+  extension.resources_discover(discoverEvent(), { model: OPENAI });
+  const skillBeforeSwitch = readSkill();
+  const prompt = withDocBullet("- not for skill");
+  const result = beforeAgentStart(prompt, ANTHROPIC, {}, extension);
+  assert.equal(result.systemPrompt, prompt.replace(HARNESS_MENTION, ""));
+  assert.equal(readSkill(), skillBeforeSwitch);
 });
 
 test("project config overrides global config", () => {
   writeConfig(GLOBAL_CONFIG, { alwaysOn: true, agentInvocable: false });
   writeConfig(PROJECT_CONFIG, { alwaysOn: false });
-  const model = { provider: "openai", api: "openai-responses" };
-  assert.equal(beforeAgentStart(SECTIONED_PROMPT, model, PROJECT_DIR), undefined);
+  assert.equal(beforeAgentStart(SECTIONED_PROMPT, OPENAI, { cwd: PROJECT_DIR }), undefined);
   assert.match(readSkill(), /\ndisable-model-invocation: true\n/);
 });
 
 test("invalid config values are ignored", () => {
   writeConfig(GLOBAL_CONFIG, { alwaysOn: "yes", agentInvocable: 0 });
-  assert.equal(beforeAgentStart(SECTIONED_PROMPT, { provider: "openai", api: "openai-responses" }), undefined);
+  assert.equal(beforeAgentStart(SECTIONED_PROMPT, OPENAI), undefined);
   assert.match(readSkill(), /\ndisable-model-invocation: false\n/);
 });
 
 function writeConfig(path, config) {
-  mkdirSync(join(path, ".."), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(config));
 }
 
@@ -220,8 +219,13 @@ function registerExtension() {
   return registered;
 }
 
-function beforeAgentStart(systemPrompt, model, cwd = "/tmp") {
-  return handlers.before_agent_start({ type: "before_agent_start", prompt: "hi", systemPrompt }, { model, cwd });
+function beforeAgentStart(systemPrompt, model, ctx = {}, extension = handlers) {
+  const event = { type: "before_agent_start", prompt: "hi", systemPrompt };
+  return extension.before_agent_start(event, { model, cwd: "/tmp", ...ctx });
+}
+
+function withDocBullet(bullet) {
+  return SECTIONED_PROMPT.replace("- some doc bullet", bullet);
 }
 
 function readSkill() {

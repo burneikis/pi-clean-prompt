@@ -33,15 +33,21 @@ export interface CleanPromptConfig {
 const DEFAULT_CONFIG: CleanPromptConfig = { alwaysOn: false, agentInvocable: true };
 
 export default function cleanPrompt(pi: ExtensionAPI) {
-  pi.on("resources_discover", (event) => ({
-    skillPaths: [writeDocsSkill(placeholderDocsBody(), loadConfig(event.cwd))],
-  }));
+  let docsSkillRegistered = false;
+
+  pi.on("resources_discover", (event, ctx) => {
+    const config = loadConfig(event.cwd);
+    docsSkillRegistered = config.alwaysOn || usesAnthropicMessagesApi(ctx.model);
+    if (!docsSkillRegistered) return;
+    return { skillPaths: [writeDocsSkill(placeholderDocsBody(), config)] };
+  });
 
   pi.on("before_agent_start", (event, ctx) => {
     const config = loadConfig(ctx.cwd);
     const { prompt, docsBlock } = extractDocsBlock(event.systemPrompt);
-    if (docsBlock) writeDocsSkill(docsBlock, config);
+    if (docsBlock && docsSkillRegistered) writeDocsSkill(docsBlock, config);
     if (!config.alwaysOn && !usesAnthropicMessagesApi(ctx.model)) return;
+    if (!docsSkillRegistered) return { systemPrompt: event.systemPrompt.replace(PI_HARNESS_MENTION, "") };
     if (prompt.includes(DOCS_BLOCK_START) && ctx.hasUI) {
       ctx.ui.notify("pi-clean-prompt: pi docs block format changed, it was not stripped", "warning");
     }

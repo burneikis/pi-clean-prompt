@@ -35,10 +35,10 @@ afterEach(() => {
 });
 
 const { default: cleanPrompt } = await import("./index.ts");
-const handlers = registerExtension();
-const skillPath = handlers.resources_discover({ type: "resources_discover", cwd: "/tmp", reason: "startup" }).skillPaths[0];
-
 const ANTHROPIC = { provider: "anthropic", api: "anthropic-messages" };
+
+const handlers = registerExtension();
+const skillPath = handlers.resources_discover(discoverEvent(), { model: ANTHROPIC }).skillPaths[0];
 
 const SECTIONED_PROMPT = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files.
 
@@ -83,7 +83,7 @@ Current date: 2025-01-01
 Current working directory: /tmp`;
 
 test("docs skill is rendered with pi paths", () => {
-  const { skillPaths } = handlers.resources_discover({ type: "resources_discover", cwd: "/tmp", reason: "startup" });
+  const { skillPaths } = handlers.resources_discover(discoverEvent(), { model: ANTHROPIC });
   const skill = readFileSync(skillPaths[0], "utf8");
   assert.match(skill, /Main documentation: \/pi\/README\.md/);
   assert.match(skill, /Additional docs: \/pi\/docs/);
@@ -154,7 +154,7 @@ test("agentInvocable false disables model invocation of the docs skill", () => {
 
 test("agentInvocable false applies on resources_discover", () => {
   writeConfig(GLOBAL_CONFIG, { agentInvocable: false });
-  handlers.resources_discover({ type: "resources_discover", cwd: "/tmp", reason: "startup" });
+  handlers.resources_discover(discoverEvent(), { model: ANTHROPIC });
   assert.match(readSkill(), /\ndisable-model-invocation: true\n/);
 });
 
@@ -163,6 +163,32 @@ test("alwaysOn cleans the prompt for non-anthropic models", () => {
   for (const model of Object.values(untouchedModels)) {
     assert.equal(systemPromptFor(SECTIONED_PROMPT, model), CLEAN_SECTIONED_PROMPT);
   }
+});
+
+test("alwaysOn false registers the docs skill when the session starts on anthropic-messages", () => {
+  writeConfig(GLOBAL_CONFIG, { alwaysOn: false });
+  const result = registerExtension().resources_discover(discoverEvent(), { model: ANTHROPIC });
+  assert.deepEqual(result?.skillPaths, [skillPath]);
+});
+
+for (const [label, model] of Object.entries(untouchedModels)) {
+  test(`alwaysOn false does not register the docs skill when the session starts on ${label}`, () => {
+    writeConfig(GLOBAL_CONFIG, { alwaysOn: false });
+    assert.equal(registerExtension().resources_discover(discoverEvent(), { model }), undefined);
+  });
+}
+
+test("docs block stays in the prompt after a switch to anthropic when the skill was not registered", () => {
+  writeConfig(GLOBAL_CONFIG, { alwaysOn: false });
+  const extension = registerExtension();
+  extension.resources_discover(discoverEvent(), { model: { provider: "openai", api: "openai-responses" } });
+  const before = readSkill();
+  const result = extension.before_agent_start(
+    { type: "before_agent_start", prompt: "hi", systemPrompt: SECTIONED_PROMPT.replace("- some doc bullet", "- not for skill") },
+    { model: ANTHROPIC, cwd: "/tmp" },
+  );
+  assert.equal(result.systemPrompt, SECTIONED_PROMPT.replace(" operating inside pi, a coding agent harness", "").replace("- some doc bullet", "- not for skill"));
+  assert.equal(readSkill(), before);
 });
 
 test("project config overrides global config", () => {
@@ -182,6 +208,10 @@ test("invalid config values are ignored", () => {
 function writeConfig(path, config) {
   mkdirSync(join(path, ".."), { recursive: true });
   writeFileSync(path, JSON.stringify(config));
+}
+
+function discoverEvent() {
+  return { type: "resources_discover", cwd: "/tmp", reason: "startup" };
 }
 
 function registerExtension() {

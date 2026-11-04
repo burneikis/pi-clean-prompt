@@ -4,7 +4,7 @@ A pi extension that removes pi-specific text from the system prompt.
 
 It does two things:
 
-1. It removes the phrase ` operating inside pi, a coding agent harness` from the opening line.
+1. It removes the phrase ` running inside pi, a coding agent harness` (` operating inside pi, ...` before pi 1.5.0) from the opening line.
 2. It removes the "Pi documentation" block and moves it into an on-demand `pi-docs` skill. The model reads the docs only when the user asks about pi.
 
 The result is a shorter, harness-neutral prompt. The pi docs stay available when you need them.
@@ -66,7 +66,7 @@ The extension supports both system prompt formats:
 - pi >= 0.86.0: sectioned prompt, docs in a `<docs>...</docs>` block.
 - pi <= 0.85.x: flat prompt, docs block ends at a blank line or at the `Current date:` / `Current working directory:` trailer.
 
-If pi changes the docs block format and the extension cannot remove it, it shows a warning in the UI.
+If pi changes the format of the docs block or the harness phrase and the extension cannot remove it, it shows a warning in the UI.
 
 ## Development
 

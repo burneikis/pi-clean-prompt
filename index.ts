@@ -15,7 +15,9 @@ const DOCS_SKILL_TEMPLATE = join(dirname(fileURLToPath(import.meta.url)), "pi-do
 const DOCS_SKILL_PATH = join(tmpdir(), "pi-clean-prompt", "pi-docs", "SKILL.md");
 const CONFIG_FILE_NAME = "clean-prompt.json";
 
-const PI_HARNESS_MENTION = " operating inside pi, a coding agent harness";
+// pi <= 1.4.x says "operating inside pi", pi >= 1.5.0 says "running inside pi"
+const PI_HARNESS_MENTION = / (?:operating|running) inside pi, a coding agent harness/;
+const HARNESS_MENTION_MARKER = "pi, a coding agent harness";
 const DOCS_BLOCK_START = "Pi documentation (read only when";
 const DOCS_BLOCK_START_PATTERN = escapeRegExp(DOCS_BLOCK_START);
 // pi >= 0.86.0 renders prompt sections as <name>...</name> blocks
@@ -53,9 +55,9 @@ export default function cleanPrompt(pi: ExtensionAPI) {
     const { prompt, docsBlock } = extractDocsBlock(event.systemPrompt);
     if (docsBlock && docsSkillRegistered) writeDocsSkill(docsBlock, config);
     if (!shouldCleanPrompt(config, ctx.model)) return;
-    if (!docsSkillRegistered) return { systemPrompt: removeHarnessMention(event.systemPrompt) };
-    if (prompt.includes(DOCS_BLOCK_START)) warnDocsBlockNotStripped(ctx);
-    return { systemPrompt: removeHarnessMention(prompt) };
+    if (!docsSkillRegistered) return { systemPrompt: removeHarnessMention(event.systemPrompt, ctx) };
+    if (prompt.includes(DOCS_BLOCK_START)) warnNotStripped(ctx, "docs block");
+    return { systemPrompt: removeHarnessMention(prompt, ctx) };
   });
 }
 
@@ -105,13 +107,15 @@ function extractDocsBlock(systemPrompt: string): { prompt: string; docsBlock?: s
   return { prompt: systemPrompt };
 }
 
-function removeHarnessMention(systemPrompt: string): string {
-  return systemPrompt.replace(PI_HARNESS_MENTION, "");
+function removeHarnessMention(systemPrompt: string, ctx: ExtensionContext): string {
+  const cleaned = systemPrompt.replace(PI_HARNESS_MENTION, "");
+  if (cleaned.includes(HARNESS_MENTION_MARKER)) warnNotStripped(ctx, "harness mention");
+  return cleaned;
 }
 
-function warnDocsBlockNotStripped(ctx: ExtensionContext) {
+function warnNotStripped(ctx: ExtensionContext, what: string) {
   if (!ctx.hasUI) return;
-  ctx.ui.notify("pi-clean-prompt: pi docs block format changed, it was not stripped", "warning");
+  ctx.ui.notify(`pi-clean-prompt: pi ${what} format changed, it was not stripped`, "warning");
 }
 
 function writeDocsSkill(body: string, config: CleanPromptConfig) {

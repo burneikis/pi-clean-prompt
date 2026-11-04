@@ -67,6 +67,16 @@ const CLEAN_SECTIONED_PROMPT = `You are an expert coding assistant. You help use
 /tmp
 </cwd>`;
 
+const PI_1_5_PROMPT = SECTIONED_PROMPT.replace(
+  "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files.",
+  "You are a coding assistant running inside pi, a coding agent harness. Help users inspect files.",
+);
+
+const CLEAN_PI_1_5_PROMPT = CLEAN_SECTIONED_PROMPT.replace(
+  "You are an expert coding assistant. You help users by reading files.",
+  "You are a coding assistant. Help users inspect files.",
+);
+
 const FLAT_PROMPT = `You are an expert coding assistant operating inside pi, a coding agent harness.
 
 Guidelines:
@@ -125,6 +135,19 @@ test("warns when the docs block is present but not matched", () => {
 
 test("sectioned prompt (pi >= 0.86) is cleaned for anthropic-messages", () => {
   assert.equal(systemPromptFor(SECTIONED_PROMPT, ANTHROPIC), CLEAN_SECTIONED_PROMPT);
+});
+
+test("pi >= 1.5 'running inside pi' prompt is cleaned for anthropic-messages", () => {
+  assert.equal(systemPromptFor(PI_1_5_PROMPT, ANTHROPIC), CLEAN_PI_1_5_PROMPT);
+});
+
+test("warns when the harness mention is present but not matched", () => {
+  const warnings = [];
+  const ui = { notify: (message, type) => warnings.push({ message, type }) };
+  const prompt = SECTIONED_PROMPT.replace("operating inside pi", "living inside pi");
+  beforeAgentStart(prompt, ANTHROPIC, { hasUI: true, ui });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0].message, /harness mention/);
 });
 
 test("flat prompt (pi <= 0.85) is cleaned for anthropic-messages", () => {
